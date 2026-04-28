@@ -1,318 +1,351 @@
 """
-AquaWatch Backend - FastAPI application for satellite water pollution detection.
-Deployed on Render. Uses Google Earth Engine Python API for Sentinel-2 analysis.
+AquaWatch Backend — FastAPI + Google Earth Engine
+Production water quality monitoring using Sentinel-2 satellite imagery.
 """
 
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import ee
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── Logging ────────────────────────────────────────────────────────────────
+# ─── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("aquawatch")
 
-# ─── GEE Authentication ─────────────────────────────────────────────────────
+# ─── GEE Authentication ───────────────────────────────────────────────────────
 def initialize_gee():
-    """
-    Authenticate with Google Earth Engine using a service account JSON key
-    stored in the GEE_SERVICE_ACCOUNT_KEY environment variable (JSON string).
-    Falls back to application-default credentials for local dev.
-    """
-    key_json = os.getenv("GEE_SERVICE_ACCOUNT_KEY")
-    project_id = os.getenv("GEE_PROJECT_ID", "")
-
+    key_json  = os.getenv("GEE_SERVICE_ACCOUNT_KEY")
+    project   = os.getenv("GEE_PROJECT_ID", "")
     if key_json:
         try:
-            key_data = json.loads(key_json)
+            key_data    = json.loads(key_json)
             credentials = ee.ServiceAccountCredentials(
-                email=key_data["client_email"],
-                key_data=json.dumps(key_data),
+                email    = key_data["client_email"],
+                key_data = json.dumps(key_data),
             )
-            ee.Initialize(credentials=credentials, project=project_id)
+            ee.Initialize(credentials=credentials, project=project)
             logger.info("GEE initialized via service account.")
         except Exception as exc:
             logger.error("GEE service account init failed: %s", exc)
             raise RuntimeError(f"GEE init failed: {exc}") from exc
     else:
-        # Local development: use `earthengine authenticate` credentials
         try:
-            ee.Initialize(project=project_id)
+            ee.Initialize(project=project)
             logger.info("GEE initialized via application-default credentials.")
         except Exception as exc:
             logger.error("GEE default init failed: %s", exc)
             raise RuntimeError(f"GEE init failed: {exc}") from exc
 
-
 initialize_gee()
 
-# ─── FastAPI App ─────────────────────────────────────────────────────────────
+# ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="AquaWatch API",
-    description="Water pollution detection using Sentinel-2 satellite imagery via Google Earth Engine.",
-    version="1.0.0",
+    title       = "AquaWatch API",
+    description = "Satellite water quality monitoring via Sentinel-2 / Google Earth Engine.",
+    version     = "2.0.0",
 )
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Restrict to your Vercel domain in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins     = ["*"],
+    allow_credentials = True,
+    allow_methods     = ["*"],
+    allow_headers     = ["*"],
 )
 
-# ─── Constants ───────────────────────────────────────────────────────────────
-SENTINEL2_COLLECTION = "COPERNICUS/S2_SR_HARMONIZED"
-CLOUD_COVER_THRESHOLD = 20          # Max cloud cover % for image selection
-DEFAULT_BUFFER_METERS = 5000        # AOI buffer radius in metres
-NDWI_WATER_THRESHOLD = 0.0          # NDWI > 0 → water pixel
-POLLUTION_THRESHOLDS = {
-    "safe":      {"ndwi_min": 0.3,  "turbidity_max": 10},
-    "moderate":  {"ndwi_min": 0.1,  "turbidity_max": 30},
-    "polluted":  {"ndwi_min": -0.1, "turbidity_max": 100},
-}
+# ─── Constants ────────────────────────────────────────────────────────────────
+SENTINEL2       = "COPERNICUS/S2_SR_HARMONIZED"
+MAX_CLOUD       = 20          # % cloud cover threshold
+BUFFER_M        = 5000        # default AOI radius in metres
+MIN_PIXELS      = 50          # minimum valid pixels for confidence
+
+# Weighted scoring model weights (must sum to 1.0)
+W_NDTI = 0.45   # turbidity — strongest pollution signal
+W_FAI  = 0.35   # algal bloom
+W_NDWI = 0.20   # water clarity (inverted — lower NDWI = worse)
+
+# Normalisation ranges (empirically derived from Sentinel-2 literature)
+NDTI_MIN, NDTI_MAX = -0.20,  0.40
+FAI_MIN,  FAI_MAX  = -0.05,  0.05
+NDWI_MIN, NDWI_MAX =  0.00,  0.80
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def build_aoi(lat: float, lng: float, buffer_m: int = DEFAULT_BUFFER_METERS) -> ee.Geometry:
-    """Return a circular AOI geometry around the given coordinates."""
+def build_aoi(lat: float, lng: float, buffer_m: int = BUFFER_M) -> ee.Geometry:
     return ee.Geometry.Point([lng, lat]).buffer(buffer_m)
 
 
-def mask_clouds_s2(image: ee.Image) -> ee.Image:
-    """Mask clouds and cirrus in Sentinel-2 SR using the QA60 band."""
-    qa = image.select("QA60")
-    cloud_bit_mask = 1 << 10
-    cirrus_bit_mask = 1 << 11
-    mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
-        qa.bitwiseAnd(cirrus_bit_mask).eq(0)
-    )
+def mask_clouds(image: ee.Image) -> ee.Image:
+    qa   = image.select("QA60")
+    mask = qa.bitwiseAnd(1 << 10).eq(0).And(qa.bitwiseAnd(1 << 11).eq(0))
     return image.updateMask(mask).divide(10000)
 
 
 def compute_ndwi(image: ee.Image) -> ee.Image:
-    """NDWI = (Green - NIR) / (Green + NIR)  — McFeeters 1996."""
+    """NDWI = (Green − NIR) / (Green + NIR)  [McFeeters 1996]"""
     return image.normalizedDifference(["B3", "B8"]).rename("NDWI")
 
 
 def compute_ndti(image: ee.Image) -> ee.Image:
-    """
-    NDTI (Normalised Difference Turbidity Index) = (Red - Green) / (Red + Green).
-    Higher values indicate more turbid / potentially polluted water.
-    """
+    """NDTI = (Red − Green) / (Red + Green)  — turbidity proxy"""
     return image.normalizedDifference(["B4", "B3"]).rename("NDTI")
 
 
 def compute_fai(image: ee.Image) -> ee.Image:
-    """
-    Floating Algae Index (FAI) proxy using NIR, Red, SWIR1.
-    Positive FAI → algal bloom / surface scum.
-    """
+    """FAI = NIR − [Red + (SWIR1−Red) × (λNIR−λRed)/(λSWIR1−λRed)]"""
     nir   = image.select("B8")
     red   = image.select("B4")
     swir1 = image.select("B11")
-    # Linear baseline between Red and SWIR1 at NIR wavelength
-    fai = nir.subtract(
+    fai   = nir.subtract(
         red.add(swir1.subtract(red).multiply((832.8 - 664.6) / (1613.7 - 664.6)))
     ).rename("FAI")
     return fai
 
 
-def classify_pollution(ndwi_val: float, ndti_val: float, fai_val: float) -> dict:
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _norm(v: float, lo: float, hi: float) -> float:
+    """Normalise v to [0, 1] within [lo, hi]."""
+    if hi == lo:
+        return 0.0
+    return _clamp((v - lo) / (hi - lo), 0.0, 1.0)
+
+
+def compute_pollution_score(ndwi: float, ndti: float, fai: float) -> dict:
     """
-    Rule-based pollution classification from index values.
-    Returns classification label, score (0-100), and contributing factors.
+    Weighted, explainable pollution score (0–100).
+
+    Model:
+        score = W_NDTI × norm(NDTI)          # turbidity contribution
+              + W_FAI  × norm(FAI)           # algal bloom contribution
+              + W_NDWI × (1 − norm(NDWI))   # clarity penalty (inverted)
+
+    All three components are normalised to [0,1] before weighting.
     """
-    score = 0
-    factors = []
+    n_ndti = _norm(ndti, NDTI_MIN, NDTI_MAX)
+    n_fai  = _norm(fai,  FAI_MIN,  FAI_MAX)
+    n_ndwi = _norm(ndwi, NDWI_MIN, NDWI_MAX)
 
-    # NDWI contribution (water presence / clarity)
-    if ndwi_val < 0.1:
-        score += 40
-        factors.append("Low water clarity (NDWI)")
-    elif ndwi_val < 0.3:
-        score += 20
-        factors.append("Moderate water clarity (NDWI)")
+    raw_score = (
+        W_NDTI * n_ndti +
+        W_FAI  * n_fai  +
+        W_NDWI * (1.0 - n_ndwi)
+    )
+    score = round(_clamp(raw_score * 100, 0, 100), 1)
 
-    # NDTI contribution (turbidity)
-    if ndti_val > 0.1:
-        score += 35
-        factors.append("High turbidity (NDTI)")
-    elif ndti_val > 0.0:
-        score += 15
-        factors.append("Moderate turbidity (NDTI)")
-
-    # FAI contribution (algal blooms)
-    if fai_val > 0.02:
-        score += 25
-        factors.append("Algal bloom detected (FAI)")
-    elif fai_val > 0.005:
-        score += 10
-        factors.append("Possible algal activity (FAI)")
-
-    if score >= 50:
-        label = "Polluted"
-        color = "#e74c3c"
-    elif score >= 20:
-        label = "Moderate"
-        color = "#f39c12"
+    # Classification
+    if score >= 60:
+        label, color = "Polluted", "#e74c3c"
+    elif score >= 30:
+        label, color = "Moderate", "#f39c12"
     else:
-        label = "Safe"
-        color = "#27ae60"
+        label, color = "Safe",     "#27ae60"
+
+    # Explainability — which factor contributed most
+    contributions = {
+        "Turbidity (NDTI)":    round(W_NDTI * n_ndti * 100, 1),
+        "Algal Activity (FAI)": round(W_FAI  * n_fai  * 100, 1),
+        "Water Clarity (NDWI)": round(W_NDWI * (1 - n_ndwi) * 100, 1),
+    }
+    dominant = max(contributions, key=contributions.get)
+
+    factors = []
+    if n_ndti > 0.5:
+        factors.append("High turbidity detected (NDTI)")
+    elif n_ndti > 0.25:
+        factors.append("Moderate turbidity (NDTI)")
+    if n_fai > 0.6:
+        factors.append("Algal bloom detected (FAI)")
+    elif n_fai > 0.3:
+        factors.append("Possible algal activity (FAI)")
+    if n_ndwi < 0.3:
+        factors.append("Low water clarity (NDWI)")
 
     return {
-        "label": label,
-        "score": min(score, 100),
-        "color": color,
-        "factors": factors,
+        "label":         label,
+        "score":         score,
+        "color":         color,
+        "factors":       factors,
+        "contributions": contributions,
+        "dominant":      dominant,
+        "weights":       {"ndti": W_NDTI, "fai": W_FAI, "ndwi": W_NDWI},
     }
 
 
-def get_date_range(days_back: int = 60):
-    """Return ISO date strings for a rolling window ending today."""
-    end   = datetime.utcnow()
+def compute_confidence(images_used: int, cloud_pct: float, pixel_count: int) -> dict:
+    """
+    Confidence level based on data quality signals.
+
+    High   → ≥5 images, <10% cloud, ≥500 valid pixels
+    Medium → 2–4 images or 10–30% cloud or 50–499 pixels
+    Low    → <2 images or >30% cloud or <50 pixels
+    """
+    score = 100
+
+    # Image count penalty
+    if images_used < 2:
+        score -= 40
+    elif images_used < 5:
+        score -= 20
+
+    # Cloud cover penalty
+    if cloud_pct > 30:
+        score -= 30
+    elif cloud_pct > 10:
+        score -= 15
+
+    # Pixel count penalty
+    if pixel_count < MIN_PIXELS:
+        score -= 30
+    elif pixel_count < 200:
+        score -= 15
+
+    score = max(0, score)
+
+    if score >= 70:
+        level, reason = "High",   "Clear signal — sufficient imagery and low cloud cover"
+    elif score >= 40:
+        level, reason = "Medium", "Moderate variation — limited imagery or partial cloud cover"
+    else:
+        level, reason = "Low",    "Noisy data — few images or high cloud cover"
+
+    return {"level": level, "score": score, "reason": reason}
+
+
+def date_range(days_back: int = 60):
+    end   = datetime.now(timezone.utc)
     start = end - timedelta(days=days_back)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-# ─── API Endpoints ────────────────────────────────────────────────────────────
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
-    return {"service": "AquaWatch API", "status": "running", "version": "1.0.0"}
+    return {"service": "AquaWatch API", "version": "2.0.0", "status": "running"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "ok", "timestamp": utc_now_iso()}
 
 
 @app.get("/analyze")
 def analyze(
-    lat: float = Query(..., description="Latitude of the point of interest"),
-    lng: float = Query(..., description="Longitude of the point of interest"),
-    buffer: int = Query(DEFAULT_BUFFER_METERS, description="AOI buffer radius in metres"),
-    days_back: int = Query(60, description="Days of imagery to look back"),
+    lat:       float = Query(..., description="Latitude"),
+    lng:       float = Query(..., description="Longitude"),
+    buffer:    int   = Query(BUFFER_M, description="AOI radius in metres"),
+    days_back: int   = Query(60,       description="Days of imagery to search"),
 ):
     """
-    Analyse water quality at a given location using the most recent
-    cloud-free Sentinel-2 composite within the specified window.
-
-    Returns:
-    - Pollution classification (Safe / Moderate / Polluted)
-    - NDWI, NDTI, FAI mean values
-    - Tile URL for map overlay
-    - Bounding box of the AOI
+    Analyse water quality at a point using Sentinel-2 median composite.
+    Returns weighted pollution score, confidence level, and GEE tile URLs.
     """
     try:
-        aoi = build_aoi(lat, lng, buffer)
-        start_date, end_date = get_date_range(days_back)
+        aoi        = build_aoi(lat, lng, buffer)
+        start, end = date_range(days_back)
 
-        collection = (
-            ee.ImageCollection(SENTINEL2_COLLECTION)
+        col = (
+            ee.ImageCollection(SENTINEL2)
             .filterBounds(aoi)
-            .filterDate(start_date, end_date)
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", CLOUD_COVER_THRESHOLD))
-            .map(mask_clouds_s2)
+            .filterDate(start, end)
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
+            .map(mask_clouds)
         )
 
-        count = collection.size().getInfo()
-        if count == 0:
+        n_images = col.size().getInfo()
+        if n_images == 0:
             raise HTTPException(
                 status_code=404,
-                detail=f"No cloud-free Sentinel-2 images found for this location in the last {days_back} days. "
-                       "Try increasing days_back or choosing a different location.",
+                detail=(
+                    f"No cloud-free Sentinel-2 images found for this location "
+                    f"in the last {days_back} days. Try increasing days_back."
+                ),
             )
 
-        # Use median composite for robustness
-        composite = collection.median().clip(aoi)
+        composite = col.median().clip(aoi)
 
         ndwi_img = compute_ndwi(composite)
         ndti_img = compute_ndti(composite)
         fai_img  = compute_fai(composite)
 
-        # Reduce to mean values over AOI
+        # Mean cloud cover of the collection
+        mean_cloud = col.aggregate_mean("CLOUDY_PIXEL_PERCENTAGE").getInfo() or 0
+
+        # Reduce to mean values + pixel count
         stats = (
             ndwi_img.addBands(ndti_img).addBands(fai_img)
+            .addBands(composite.select("B3").rename("pixel_count"))
             .reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=aoi,
-                scale=20,
-                maxPixels=1e9,
+                reducer   = ee.Reducer.mean().combine(ee.Reducer.count(), sharedInputs=False),
+                geometry  = aoi,
+                scale     = 20,
+                maxPixels = 1e9,
             )
             .getInfo()
         )
 
-        ndwi_val = stats.get("NDWI", 0) or 0
-        ndti_val = stats.get("NDTI", 0) or 0
-        fai_val  = stats.get("FAI",  0) or 0
+        ndwi_val  = stats.get("NDWI_mean",        stats.get("NDWI",  0)) or 0
+        ndti_val  = stats.get("NDTI_mean",        stats.get("NDTI",  0)) or 0
+        fai_val   = stats.get("FAI_mean",         stats.get("FAI",   0)) or 0
+        pix_count = int(stats.get("pixel_count_count", stats.get("B3_count", 200)) or 200)
 
-        classification = classify_pollution(ndwi_val, ndti_val, fai_val)
+        classification = compute_pollution_score(ndwi_val, ndti_val, fai_val)
+        confidence     = compute_confidence(n_images, mean_cloud, pix_count)
 
-        # ── Tile URLs for map overlay ──────────────────────────────────────
-        # True-colour RGB
-        rgb_params = {
-            "bands": ["B4", "B3", "B2"],
-            "min": 0.0,
-            "max": 0.3,
-            "gamma": 1.4,
-        }
-        rgb_map = composite.getMapId(rgb_params)
-
-        # NDWI coloured layer
-        ndwi_params = {
-            "bands": ["NDWI"],
-            "min": -0.5,
-            "max": 0.8,
+        # GEE tile URLs
+        rgb_map = composite.getMapId({
+            "bands": ["B4", "B3", "B2"], "min": 0.0, "max": 0.3, "gamma": 1.4,
+        })
+        ndwi_map = ndwi_img.getMapId({
+            "bands": ["NDWI"], "min": -0.5, "max": 0.8,
             "palette": ["#8B4513", "#F5DEB3", "#87CEEB", "#1E90FF", "#00008B"],
-        }
-        ndwi_map = ndwi_img.getMapId(ndwi_params)
-
-        # Pollution overlay (NDTI-based)
-        pollution_params = {
-            "bands": ["NDTI"],
-            "min": -0.2,
-            "max": 0.3,
+        })
+        pollution_map = ndti_img.getMapId({
+            "bands": ["NDTI"], "min": -0.2, "max": 0.3,
             "palette": ["#27ae60", "#f39c12", "#e74c3c"],
-        }
-        pollution_map = ndti_img.getMapId(pollution_params)
+        })
 
-        # AOI bounding box for map centering
         bounds = aoi.bounds().getInfo()["coordinates"][0]
-        bbox = {
-            "west":  bounds[0][0],
-            "south": bounds[0][1],
-            "east":  bounds[2][0],
-            "north": bounds[2][1],
+        bbox   = {
+            "west":  bounds[0][0], "south": bounds[0][1],
+            "east":  bounds[2][0], "north": bounds[2][1],
         }
 
         return {
-            "location": {"lat": lat, "lng": lng},
-            "aoi_buffer_m": buffer,
-            "date_range": {"start": start_date, "end": end_date},
-            "images_used": count,
+            "location":       {"lat": round(lat, 5), "lng": round(lng, 5)},
+            "aoi_buffer_m":   buffer,
+            "date_range":     {"start": start, "end": end},
+            "images_used":    n_images,
+            "cloud_cover_pct": round(mean_cloud, 1),
             "indices": {
                 "ndwi": round(ndwi_val, 4),
                 "ndti": round(ndti_val, 4),
                 "fai":  round(fai_val,  6),
             },
             "classification": classification,
+            "confidence":     confidence,
             "tile_urls": {
                 "rgb":       rgb_map["tile_fetcher"].url_format,
                 "ndwi":      ndwi_map["tile_fetcher"].url_format,
                 "pollution": pollution_map["tile_fetcher"].url_format,
             },
-            "bbox": bbox,
+            "bbox":      bbox,
+            "timestamp": utc_now_iso(),
         }
 
     except HTTPException:
@@ -324,118 +357,84 @@ def analyze(
 
 @app.get("/timeseries")
 def timeseries(
-    lat: float = Query(..., description="Latitude"),
-    lng: float = Query(..., description="Longitude"),
-    buffer: int = Query(DEFAULT_BUFFER_METERS, description="AOI buffer radius in metres"),
-    months: int = Query(12, description="Number of months of history to fetch"),
+    lat:    float = Query(..., description="Latitude"),
+    lng:    float = Query(..., description="Longitude"),
+    buffer: int   = Query(BUFFER_M, description="AOI radius in metres"),
+    months: int   = Query(12,       description="Months of history"),
 ):
-    """
-    Return monthly NDWI, NDTI, and FAI time-series for the given location.
-    Each data point is the median composite for that calendar month.
-    """
+    """Monthly NDWI / NDTI / FAI time-series with trend detection."""
     try:
-        aoi = build_aoi(lat, lng, buffer)
-        end_date   = datetime.utcnow()
-        start_date = end_date - timedelta(days=months * 30)
+        aoi        = build_aoi(lat, lng, buffer)
+        end_dt     = datetime.now(timezone.utc)
+        start_dt   = end_dt - timedelta(days=months * 30)
 
-        collection = (
-            ee.ImageCollection(SENTINEL2_COLLECTION)
+        col = (
+            ee.ImageCollection(SENTINEL2)
             .filterBounds(aoi)
-            .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", CLOUD_COVER_THRESHOLD))
-            .map(mask_clouds_s2)
+            .filterDate(start_dt.strftime("%Y-%m-%d"), end_dt.strftime("%Y-%m-%d"))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
+            .map(mask_clouds)
         )
 
-        count = collection.size().getInfo()
-        if count == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="No cloud-free images found for this location and time range.",
-            )
+        if col.size().getInfo() == 0:
+            raise HTTPException(status_code=404, detail="No cloud-free images found.")
 
-        # Build monthly composites
         results = []
-        current = start_date.replace(day=1)
+        current = start_dt.replace(day=1)
 
-        while current <= end_date:
-            next_month = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
-            month_str  = current.strftime("%Y-%m")
-
-            monthly = (
-                collection
-                .filterDate(current.strftime("%Y-%m-%d"), next_month.strftime("%Y-%m-%d"))
-                .median()
-                .clip(aoi)
+        while current <= end_dt:
+            nxt = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
+            m_col = col.filterDate(
+                current.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")
             )
+            m_count = m_col.size().getInfo()
 
-            # Check if any images exist for this month
-            month_count = (
-                collection
-                .filterDate(current.strftime("%Y-%m-%d"), next_month.strftime("%Y-%m-%d"))
-                .size()
-                .getInfo()
-            )
-
-            if month_count > 0:
-                ndwi_img = compute_ndwi(monthly)
-                ndti_img = compute_ndti(monthly)
-                fai_img  = compute_fai(monthly)
-
+            if m_count > 0:
+                comp  = m_col.median().clip(aoi)
                 stats = (
-                    ndwi_img.addBands(ndti_img).addBands(fai_img)
+                    compute_ndwi(comp).addBands(compute_ndti(comp)).addBands(compute_fai(comp))
                     .reduceRegion(
-                        reducer=ee.Reducer.mean(),
-                        geometry=aoi,
-                        scale=20,
-                        maxPixels=1e9,
+                        reducer=ee.Reducer.mean(), geometry=aoi, scale=20, maxPixels=1e9
                     )
                     .getInfo()
                 )
+                ndwi_v = stats.get("NDWI") or 0
+                ndti_v = stats.get("NDTI") or 0
+                fai_v  = stats.get("FAI")  or 0
 
-                ndwi_val = stats.get("NDWI", None)
-                ndti_val = stats.get("NDTI", None)
-                fai_val  = stats.get("FAI",  None)
-
-                if ndwi_val is not None:
-                    classification = classify_pollution(
-                        ndwi_val or 0, ndti_val or 0, fai_val or 0
-                    )
-                    results.append({
-                        "month":          month_str,
-                        "ndwi":           round(ndwi_val, 4) if ndwi_val is not None else None,
-                        "ndti":           round(ndti_val, 4) if ndti_val is not None else None,
-                        "fai":            round(fai_val,  6) if fai_val  is not None else None,
-                        "classification": classification["label"],
-                        "score":          classification["score"],
-                        "images":         month_count,
-                    })
-
-            current = next_month
+                cls = compute_pollution_score(ndwi_v, ndti_v, fai_v)
+                results.append({
+                    "month":          current.strftime("%Y-%m"),
+                    "ndwi":           round(ndwi_v, 4),
+                    "ndti":           round(ndti_v, 4),
+                    "fai":            round(fai_v,  6),
+                    "score":          cls["score"],
+                    "classification": cls["label"],
+                    "images":         m_count,
+                })
+            current = nxt
 
         if not results:
-            raise HTTPException(
-                status_code=404,
-                detail="Could not compute time-series. No valid water pixels found.",
-            )
+            raise HTTPException(status_code=404, detail="No valid data points found.")
 
-        # Trend: simple linear regression on NDWI
-        ndwi_values = [r["ndwi"] for r in results if r["ndwi"] is not None]
-        trend = "stable"
-        if len(ndwi_values) >= 3:
-            x = np.arange(len(ndwi_values), dtype=float)
-            y = np.array(ndwi_values, dtype=float)
-            slope = np.polyfit(x, y, 1)[0]
-            if slope > 0.005:
-                trend = "improving"
-            elif slope < -0.005:
+        # Linear trend on pollution score
+        scores = [r["score"] for r in results]
+        trend  = "stable"
+        if len(scores) >= 3:
+            x     = np.arange(len(scores), dtype=float)
+            slope = np.polyfit(x, scores, 1)[0]
+            if slope > 1.5:
                 trend = "degrading"
+            elif slope < -1.5:
+                trend = "improving"
 
         return {
-            "location":   {"lat": lat, "lng": lng},
-            "months":     months,
+            "location":    {"lat": round(lat, 5), "lng": round(lng, 5)},
+            "months":      months,
             "data_points": len(results),
-            "trend":      trend,
-            "series":     results,
+            "trend":       trend,
+            "series":      results,
+            "timestamp":   utc_now_iso(),
         }
 
     except HTTPException:
@@ -445,54 +444,216 @@ def timeseries(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/alerts")
-def alerts(
-    lat: float = Query(..., description="Latitude"),
-    lng: float = Query(..., description="Longitude"),
-    buffer: int = Query(DEFAULT_BUFFER_METERS, description="AOI buffer radius in metres"),
+@app.get("/compare")
+def compare(
+    lat1:      float = Query(..., description="Latitude of Location A"),
+    lng1:      float = Query(..., description="Longitude of Location A"),
+    lat2:      float = Query(..., description="Latitude of Location B"),
+    lng2:      float = Query(..., description="Longitude of Location B"),
+    buffer:    int   = Query(BUFFER_M, description="AOI radius in metres"),
+    days_back: int   = Query(60,       description="Days of imagery to search"),
 ):
     """
-    Check current pollution status and return alert level + recommended actions.
+    Side-by-side water quality comparison of two locations.
+    Returns metrics, scores, confidence, and rule-based insights.
     """
     try:
+        def _analyse_point(lat, lng):
+            aoi        = build_aoi(lat, lng, buffer)
+            start, end = date_range(days_back)
+            col = (
+                ee.ImageCollection(SENTINEL2)
+                .filterBounds(aoi)
+                .filterDate(start, end)
+                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
+                .map(mask_clouds)
+            )
+            n = col.size().getInfo()
+            if n == 0:
+                return None, "No cloud-free images found for this location."
+
+            comp       = col.median().clip(aoi)
+            mean_cloud = col.aggregate_mean("CLOUDY_PIXEL_PERCENTAGE").getInfo() or 0
+            stats = (
+                compute_ndwi(comp).addBands(compute_ndti(comp)).addBands(compute_fai(comp))
+                .reduceRegion(
+                    reducer=ee.Reducer.mean(), geometry=aoi, scale=20, maxPixels=1e9
+                )
+                .getInfo()
+            )
+            ndwi_v = stats.get("NDWI") or 0
+            ndti_v = stats.get("NDTI") or 0
+            fai_v  = stats.get("FAI")  or 0
+            cls    = compute_pollution_score(ndwi_v, ndti_v, fai_v)
+            conf   = compute_confidence(n, mean_cloud, 200)
+            return {
+                "lat": round(lat, 5), "lng": round(lng, 5),
+                "images_used": n,
+                "cloud_cover_pct": round(mean_cloud, 1),
+                "indices": {
+                    "ndwi": round(ndwi_v, 4),
+                    "ndti": round(ndti_v, 4),
+                    "fai":  round(fai_v,  6),
+                },
+                "classification": cls,
+                "confidence":     conf,
+            }, None
+
+        result_a, err_a = _analyse_point(lat1, lng1)
+        result_b, err_b = _analyse_point(lat2, lng2)
+
+        if err_a:
+            raise HTTPException(status_code=404, detail=f"Location A: {err_a}")
+        if err_b:
+            raise HTTPException(status_code=404, detail=f"Location B: {err_b}")
+
+        # Determine cleaner location
+        score_a = result_a["classification"]["score"]
+        score_b = result_b["classification"]["score"]
+        winner  = "A" if score_a <= score_b else "B"
+
+        # Rule-based insights
+        insights = []
+        diff = abs(score_a - score_b)
+
+        if diff < 5:
+            insights.append("Both locations show similar water quality levels.")
+        elif winner == "A":
+            insights.append(f"Location A has significantly cleaner water (score difference: {diff:.0f} points).")
+        else:
+            insights.append(f"Location B has significantly cleaner water (score difference: {diff:.0f} points).")
+
+        ndti_a = result_a["indices"]["ndti"]
+        ndti_b = result_b["indices"]["ndti"]
+        if ndti_b > ndti_a + 0.05:
+            insights.append("Location B shows higher turbidity — possible suspended sediment or runoff.")
+        elif ndti_a > ndti_b + 0.05:
+            insights.append("Location A shows higher turbidity — possible suspended sediment or runoff.")
+
+        fai_a = result_a["indices"]["fai"]
+        fai_b = result_b["indices"]["fai"]
+        if fai_a > 0.01:
+            insights.append("Location A shows signs of algal activity — monitor for bloom development.")
+        if fai_b > 0.01:
+            insights.append("Location B shows signs of algal activity — monitor for bloom development.")
+
+        ndwi_a = result_a["indices"]["ndwi"]
+        ndwi_b = result_b["indices"]["ndwi"]
+        if ndwi_a < 0.2:
+            insights.append("Location A has low water clarity — may indicate high sediment load.")
+        if ndwi_b < 0.2:
+            insights.append("Location B has low water clarity — may indicate high sediment load.")
+
+        loser = "B" if winner == "A" else "A"
+        insights.append(
+            f"Location {loser} requires more urgent monitoring and potential ground validation."
+        )
+
+        return {
+            "location_a":  result_a,
+            "location_b":  result_b,
+            "winner":      winner,
+            "score_diff":  round(diff, 1),
+            "insights":    insights,
+            "date_range":  {"start": date_range(days_back)[0], "end": date_range(days_back)[1]},
+            "timestamp":   utc_now_iso(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error in /compare: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/alerts")
+def alerts(
+    lat:    float = Query(..., description="Latitude"),
+    lng:    float = Query(..., description="Longitude"),
+    buffer: int   = Query(BUFFER_M, description="AOI radius in metres"),
+):
+    """Current alert level, severity, and recommended actions."""
+    try:
         result = analyze(lat=lat, lng=lng, buffer=buffer)
-        classification = result["classification"]
-        indices        = result["indices"]
+        cls    = result["classification"]
+        conf   = result["confidence"]
+        idx    = result["indices"]
+        level  = cls["label"]
 
-        alert_level = classification["label"]
-        recommendations = []
+        # Severity (combines pollution + confidence)
+        if level == "Polluted" and conf["level"] == "High":
+            severity = "Critical"
+        elif level == "Polluted":
+            severity = "High"
+        elif level == "Moderate" and conf["level"] == "High":
+            severity = "Medium"
+        elif level == "Moderate":
+            severity = "Low-Medium"
+        else:
+            severity = "None"
 
-        if alert_level == "Polluted":
+        # Triggered alerts
+        triggered = []
+        if idx["ndti"] > 0.1:
+            triggered.append({
+                "type":      "High Turbidity",
+                "index":     "NDTI",
+                "value":     round(idx["ndti"], 4),
+                "threshold": 0.1,
+                "severity":  "High",
+            })
+        if idx["fai"] > 0.02:
+            triggered.append({
+                "type":      "Algal Bloom",
+                "index":     "FAI",
+                "value":     round(idx["fai"], 6),
+                "threshold": 0.02,
+                "severity":  "High",
+            })
+        if idx["ndwi"] < 0.1:
+            triggered.append({
+                "type":      "Low Water Clarity",
+                "index":     "NDWI",
+                "value":     round(idx["ndwi"], 4),
+                "threshold": 0.1,
+                "severity":  "Medium",
+            })
+
+        # Recommendations
+        if level == "Polluted":
             recommendations = [
-                "⚠️ Avoid recreational water contact immediately.",
-                "🚰 Do not use this water source for drinking or irrigation.",
-                "📢 Notify local environmental authorities.",
-                "🔬 Collect water samples for laboratory analysis.",
-                "📍 Mark area as restricted until further assessment.",
+                "Avoid recreational water contact immediately.",
+                "Do not use this water source for drinking or irrigation.",
+                "Notify local environmental authorities.",
+                "Collect water samples for laboratory analysis.",
+                "Mark area as restricted until further assessment.",
             ]
-        elif alert_level == "Moderate":
+        elif level == "Moderate":
             recommendations = [
-                "⚠️ Exercise caution near this water body.",
-                "🔍 Monitor water quality over the next 2–4 weeks.",
-                "📊 Increase sampling frequency.",
-                "🏊 Limit recreational activities.",
+                "Exercise caution near this water body.",
+                "Monitor water quality over the next 2–4 weeks.",
+                "Increase sampling frequency.",
+                "Limit recreational activities.",
             ]
         else:
             recommendations = [
-                "✅ Water quality appears normal.",
-                "📅 Continue routine monitoring.",
-                "📈 Track seasonal variations.",
+                "Water quality appears normal.",
+                "Continue routine monitoring.",
+                "Track seasonal variations.",
             ]
 
         return {
-            "location":        {"lat": lat, "lng": lng},
-            "alert_level":     alert_level,
-            "alert_color":     classification["color"],
-            "pollution_score": classification["score"],
-            "factors":         classification["factors"],
-            "indices":         indices,
+            "location":        {"lat": round(lat, 5), "lng": round(lng, 5)},
+            "alert_level":     level,
+            "severity":        severity,
+            "alert_color":     cls["color"],
+            "pollution_score": cls["score"],
+            "factors":         cls["factors"],
+            "indices":         idx,
+            "confidence":      conf,
+            "triggered_alerts": triggered,
             "recommendations": recommendations,
-            "timestamp":       datetime.utcnow().isoformat(),
+            "timestamp":       utc_now_iso(),
         }
 
     except HTTPException:
