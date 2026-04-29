@@ -154,7 +154,21 @@
               <i class="fa-solid fa-eye"></i>
               <span class="section-title">Water Appearance</span>
             </div>
-            <div id="water-appearance" class="water-appearance-content"></div>
+            <div id="water-appearance" class="water-appearance-content">
+              <!-- TEST CONTENT - Will be replaced by JavaScript -->
+              <div class="appearance-badge" style="background: rgba(243, 156, 18, 0.15); color: #f39c12; padding: 8px 16px; border-radius: 20px; display: inline-block; font-weight: 600; margin-bottom: 12px;">
+                Brownish/Murky
+              </div>
+              <p class="appearance-desc" style="color: var(--text-secondary); margin: 8px 0; line-height: 1.6;">
+                High suspended sediment detected via spectral reflectance
+              </p>
+              <p class="appearance-indicator" style="color: var(--text-secondary); margin: 8px 0;">
+                <strong>Indicator:</strong> Likely sediment load from erosion or runoff
+              </p>
+              <p class="appearance-note" style="color: var(--text-muted); font-size: 0.85rem; margin-top: 12px;">
+                <i class="fa-solid fa-info-circle"></i> Based on spectral reflectance analysis, not direct visual observation
+              </p>
+            </div>
           </div>
 
           <!-- Possible Pollution Sources (NEW) -->
@@ -163,7 +177,28 @@
               <i class="fa-solid fa-triangle-exclamation"></i>
               <span class="section-title">Possible Pollution Sources</span>
             </div>
-            <div id="pollution-sources" class="pollution-sources-content"></div>
+            <div id="pollution-sources" class="pollution-sources-content">
+              <!-- TEST CONTENT - Will be replaced by JavaScript -->
+              <div class="sources-confidence" style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 12px;">
+                Confidence: <strong style="color: var(--text-primary);">Moderate</strong>
+              </div>
+              <div class="source-item" style="background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 3px solid #f39c12;">
+                <div class="source-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <span class="source-name" style="font-weight: 600; color: var(--text-primary);">Agricultural runoff</span>
+                  <span class="source-likelihood likelihood-high" style="background: rgba(231, 76, 60, 0.15); color: #e74c3c; padding: 4px 12px; border-radius: 12px; font-size: 0.85rem; font-weight: 600;">High</span>
+                </div>
+                <p class="source-reasoning" style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin: 8px 0;">
+                  Elevated turbidity consistent with soil erosion and sediment transport from agricultural areas
+                </p>
+                <div class="source-indicators" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
+                  <span class="indicator-tag" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem;">High NDTI</span>
+                  <span class="indicator-tag" style="background: rgba(59, 130, 246, 0.15); color: #3b82f6; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem;">Suspended sediment signature</span>
+                </div>
+              </div>
+              <p class="sources-disclaimer" style="background: rgba(231, 76, 60, 0.1); padding: 12px; border-radius: 8px; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.5; margin-top: 12px;">
+                <i class="fa-solid fa-shield-halved"></i> These are probabilistic inferences based on spectral patterns, not confirmed identifications. Ground validation and water sampling required for definitive source attribution.
+              </p>
+            </div>
           </div>
 
           <!-- Data Reliability (NEW) -->
@@ -172,7 +207,33 @@
               <i class="fa-solid fa-chart-line"></i>
               <span class="section-title">Data Reliability</span>
             </div>
-            <div id="data-reliability" class="data-reliability-content"></div>
+            <div id="data-reliability" class="data-reliability-content">
+              <!-- TEST CONTENT - Will be replaced by JavaScript -->
+              <div class="reliability-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 12px;">
+                <div class="reliability-item" style="background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div class="reliability-label" style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 4px;">Images Used</div>
+                  <div class="reliability-value" style="color: var(--text-primary); font-size: 1.5rem; font-weight: 700;">5</div>
+                </div>
+                <div class="reliability-item" style="background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div class="reliability-label" style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 4px;">Cloud Cover</div>
+                  <div class="reliability-value" style="color: var(--text-primary); font-size: 1.5rem; font-weight: 700;">10%</div>
+                </div>
+                <div class="reliability-item" style="background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div class="reliability-label" style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 4px;">Valid Pixels</div>
+                  <div class="reliability-value" style="color: var(--text-primary); font-size: 1.5rem; font-weight: 700;">1,500</div>
+                </div>
+                <div class="reliability-item" style="background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; text-align: center;">
+                  <div class="reliability-label" style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 4px;">Confidence</div>
+                  <div class="reliability-value" style="color: #27ae60; font-size: 1.5rem; font-weight: 700;">High</div>
+                </div>
+              </div>
+              <div class="reliability-score-bar" style="background: rgba(255,255,255,0.05); height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 12px;">
+                <div class="reliability-score-fill" style="width: 85%; background: #27ae60; height: 100%;"></div>
+              </div>
+              <p class="reliability-note" style="color: var(--text-secondary); font-size: 0.85rem; line-height: 1.5;">
+                Analysis based on 5 Sentinel-2 images with 10% average cloud cover. Confidence: High (85/100).
+              </p>
+            </div>
           </div>
 
           <!-- Meta -->
