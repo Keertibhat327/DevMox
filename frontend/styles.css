@@ -1,7 +1,7 @@
-﻿/* AquaWatch Styles */
+﻿/* AquaVision Styles */
 
 /* ============================================================
-   AquaWatch — Production Stylesheet
+   AquaVision — Production Stylesheet
    Dark navy dashboard for water pollution monitoring
    ============================================================ */
 
@@ -2429,7 +2429,7 @@ strong { font-weight: var(--fw-semibold); }
 }
 
 /* ════════════════════════════════════════════════════════════
-   AquaWatch v2 — New Component Styles
+   AquaVision v2 — New Component Styles
 ════════════════════════════════════════════════════════════ */
 
 /* ── Score bar ─────────────────────────────────────────────── */
@@ -3594,5 +3594,300 @@ strong { font-weight: var(--fw-semibold); }
 @media (max-width: 480px) {
   .reliability-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TIER-2 FEATURES — Land Use · Forecast · Industrial · Disasters
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Upstream Land Use ────────────────────────────────────────── */
+.luc-placeholder,
+.forecast-placeholder {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: var(--space-2) 0;
+}
+
+.luc-loading,
+.forecast-loading {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  padding: var(--space-2) 0;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.luc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+
+.luc-risk {
+  font-size: var(--text-sm);
+}
+
+.luc-score {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-bold);
+}
+
+.luc-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.luc-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 36px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.luc-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.luc-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.luc-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 0.5s ease;
+}
+
+.luc-val {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.luc-factors {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.luc-factors li {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  padding-left: var(--space-3);
+  position: relative;
+}
+
+.luc-factors li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: var(--text-muted);
+}
+
+.luc-source {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── 7-Day Rainfall Forecast ──────────────────────────────────── */
+.forecast-impact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.fi-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.fi-value {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+}
+
+.fi-predicted {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  width: 100%;
+}
+
+.forecast-days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: var(--space-3);
+}
+
+.forecast-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) 2px;
+  border: 1px solid transparent;
+  transition: background 0.2s;
+}
+
+.forecast-day-alert {
+  border-color: rgba(231, 76, 60, 0.3);
+  background: rgba(231, 76, 60, 0.06);
+}
+
+.fd-name {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.fd-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.fd-rain {
+  font-size: 9px;
+  color: var(--text-secondary);
+  font-weight: var(--fw-medium);
+}
+
+.fd-rain-high {
+  color: var(--polluted);
+}
+
+.fd-prob {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.fd-bar-wrap {
+  width: 100%;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 2px;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.fd-bar {
+  width: 100%;
+  border-radius: 2px 2px 0 0;
+  transition: height 0.4s ease;
+  min-height: 2px;
+}
+
+.forecast-source {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ── Active Disaster Events ───────────────────────────────────── */
+.disaster-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.disaster-event {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  background: rgba(231, 76, 60, 0.06);
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.de-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.de-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.de-title {
+  font-size: var(--text-sm);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  line-height: var(--lh-tight);
+  margin-bottom: var(--space-1);
+}
+
+.de-meta {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.de-link {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  align-self: center;
+  padding: var(--space-1);
+  transition: color 0.2s;
+}
+
+.de-link:hover {
+  color: var(--text-primary);
+}
+
+.disaster-note {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: rgba(231, 76, 60, 0.08);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+  line-height: var(--lh-relaxed);
+}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 520px) {
+  .forecast-days {
+    grid-template-columns: repeat(7, 1fr);
+  }
+  .fd-name, .fd-rain, .fd-prob {
+    font-size: 8px;
+  }
+  .luc-row {
+    grid-template-columns: 76px 1fr 32px;
   }
 }

@@ -1,9 +1,9 @@
 @echo off
-title AquaWatch - NEW VERSION
+title AquaVision - NEW VERSION
 cls
 echo.
 echo ========================================
-echo   AquaWatch - OPEN NEW VERSION
+echo   AquaVision - OPEN NEW VERSION
 echo ========================================
 echo.
 echo This will open index-new.html which

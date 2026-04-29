@@ -1,9 +1,9 @@
 @echo off
-title AquaWatch - Force Fresh Load
+title AquaVision - Force Fresh Load
 cls
 echo.
 echo ========================================
-echo   AquaWatch - FORCE FRESH LOAD
+echo   AquaVision - FORCE FRESH LOAD
 echo ========================================
 echo.
 echo This will:

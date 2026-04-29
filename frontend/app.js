@@ -1,5 +1,5 @@
 /**
- * AquaWatch v2 — Frontend Application
+ * AquaVision v2 — Frontend Application
  * Full-featured satellite water quality monitoring dashboard.
  */
 "use strict";
@@ -178,7 +178,7 @@ const state = {
   history: JSON.parse(localStorage.getItem("aw_history") || "[]"),
 };
 
-const overlayState = {rgb: true, ndwi: false, pollution: false};
+const overlayState = {rgb: true, ndwi: false, pollution: false, watershed: false, industrial: false};
 let _demoPollutionRect = null;
 let _apiWasOnline = null;
 
@@ -197,6 +197,7 @@ const dom = {
   btnSetA: $("btn-set-compare-a"), btnSetB: $("btn-set-compare-b"), btnExport: $("btn-export"),
   historySection: $("history-section"), historyList: $("history-list"), btnClearHistory: $("btn-clear-history"),
   layerRgb: $("layer-rgb"), layerNdwi: $("layer-ndwi"), layerPollution: $("layer-pollution"),
+  layerWatershed: $("layer-watershed"), layerIndustrial: $("layer-industrial"),
   monthsSelect: $("months-select"), btnTimeseries: $("btn-timeseries"),
   analysisLoading: $("analysis-loading"), analysisContent: $("analysis-content"), analysisEmpty: $("analysis-empty"),
   tsTrend: $("ts-trend"), tsPoints: $("ts-points"), tsAvgScore: $("ts-avg-score"), tsLatestStatus: $("ts-latest-status"),
@@ -314,6 +315,16 @@ function syncOverlays() {
   }
   if (state.layers.rgb)  overlayState.rgb  ? map.addLayer(state.layers.rgb)  : map.removeLayer(state.layers.rgb);
   if (state.layers.ndwi) overlayState.ndwi ? map.addLayer(state.layers.ndwi) : map.removeLayer(state.layers.ndwi);
+  if (overlayState.watershed) {
+    if (watershedLayer && !map.hasLayer(watershedLayer)) map.addLayer(watershedLayer);
+  } else {
+    if (watershedLayer && map.hasLayer(watershedLayer)) map.removeLayer(watershedLayer);
+  }
+  if (overlayState.industrial) {
+    if (!map.hasLayer(industrialGroup)) map.addLayer(industrialGroup);
+  } else {
+    if (map.hasLayer(industrialGroup)) map.removeLayer(industrialGroup);
+  }
 }
 
 function showPollutionRect(show) {
@@ -330,6 +341,9 @@ function showPollutionRect(show) {
 function clearSatLayers() {
   Object.values(state.layers).forEach(l => { if (l && map.hasLayer(l)) map.removeLayer(l); });
   state.layers.rgb = state.layers.ndwi = state.layers.pollution = null;
+  if (watershedLayer && map.hasLayer(watershedLayer)) map.removeLayer(watershedLayer);
+  watershedLayer = null;
+  industrialGroup.clearLayers();
   showPollutionRect(false);
 }
 
@@ -340,10 +354,17 @@ function addTileLayer(url, name) {
   if (overlayState[name] ?? true) map.addLayer(l);
 }
 
-dom.layerRgb.addEventListener("change",       () => { overlayState.rgb       = dom.layerRgb.checked;       syncOverlays(); });
-dom.layerNdwi.addEventListener("change",      () => { overlayState.ndwi      = dom.layerNdwi.checked;      syncOverlays(); });
-dom.layerPollution.addEventListener("change", () => { overlayState.pollution  = dom.layerPollution.checked; syncOverlays();
+dom.layerRgb.addEventListener("change",       () => { overlayState.rgb        = dom.layerRgb.checked;       syncOverlays(); });
+dom.layerNdwi.addEventListener("change",      () => { overlayState.ndwi       = dom.layerNdwi.checked;      syncOverlays(); });
+dom.layerPollution.addEventListener("change", () => { overlayState.pollution   = dom.layerPollution.checked; syncOverlays();
   if (dom.layerPollution.checked && !state.lastAnalysis) showToast("warning","No Analysis Yet","Run an analysis first.",3000);
+});
+dom.layerWatershed.addEventListener("change", () => { overlayState.watershed  = dom.layerWatershed.checked;  syncOverlays();
+  if (dom.layerWatershed.checked && !watershedLayer) showToast("warning","No Land Use Data","Run an analysis first.",3000);
+});
+dom.layerIndustrial.addEventListener("change", () => { overlayState.industrial = dom.layerIndustrial.checked; syncOverlays();
+  if (dom.layerIndustrial.checked && state.selectedLat) fetchIndustrialFacilities(state.selectedLat, state.selectedLng);
+  else if (dom.layerIndustrial.checked) showToast("warning","No Location","Select a location first.",3000);
 });
 
 // ─── Analyze ──────────────────────────────────────────────────────────────────
@@ -378,6 +399,11 @@ async function runAnalysis() {
     updateAlertBadge(data.classification.label);
     syncOverlays();
     addToHistory(lat, lng, state.selectedName, data);
+    // Tier-2 enrichment — fire in parallel, non-blocking
+    fetchWatershed(lat, lng);
+    fetchForecast(lat, lng, data.classification.score);
+    checkDisasterEvents(lat, lng);
+    if (overlayState.industrial) fetchIndustrialFacilities(lat, lng);
 
     const t = data.classification.label==="Safe"?"success":data.classification.label==="Moderate"?"warning":"error";
     showToast(t, `${demo?"Demo — ":""}${data.classification.label}`,
@@ -524,6 +550,14 @@ function renderResultCard(data, demo=false) {
   dom.resultDates.textContent  = `📅 ${data.date_range.start} → ${data.date_range.end}`;
   dom.resultTs.textContent     = `🕐 ${formatTimestamp(data.timestamp)}`;
 
+  // Reset Tier-2 sections to loading state
+  const luEl = document.getElementById('land-use-content');
+  const fcEl = document.getElementById('forecast-content');
+  const disEl = document.getElementById('section-disaster');
+  if (luEl) luEl.innerHTML = '<p class="luc-placeholder luc-loading">Fetching upstream land use…</p>';
+  if (fcEl) fcEl.innerHTML = '<p class="forecast-placeholder forecast-loading">Fetching weather forecast…</p>';
+  if (disEl) disEl.classList.add('hidden');
+
   dom.resultCard.classList.remove("hidden");
 }
 
@@ -531,6 +565,294 @@ function updateAlertBadge(label) {
   if (label==="Polluted") { dom.alertBadge.textContent="!"; dom.alertBadge.classList.remove("hidden"); }
   else if (label==="Moderate") { dom.alertBadge.textContent="~"; dom.alertBadge.classList.remove("hidden"); }
   else dom.alertBadge.classList.add("hidden");
+}
+
+// ─── Tier-2: Helpers ─────────────────────────────────────────────────────────
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371, toRad = x => x * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function wmoIcon(code) {
+  if (code === 0) return '☀️';
+  if (code <= 3)  return '⛅';
+  if (code <= 48) return '🌫️';
+  if (code <= 55) return '🌦️';
+  if (code <= 65) return '🌧️';
+  if (code <= 77) return '❄️';
+  if (code <= 82) return '🌧️';
+  return '⛈️';
+}
+
+function wmoLabel(code) {
+  if (code === 0) return 'Clear';
+  if (code <= 3)  return 'Partly Cloudy';
+  if (code <= 48) return 'Foggy';
+  if (code <= 55) return 'Drizzle';
+  if (code <= 65) return 'Rain';
+  if (code <= 77) return 'Snow';
+  if (code <= 82) return 'Showers';
+  return 'Thunderstorm';
+}
+
+// ─── Tier-2: Watershed / Upstream Land Use ────────────────────────────────────
+let watershedLayer = null;
+
+const LU_COLORS = {
+  'Cropland':     '#e9c46a',
+  'Built-up':     '#e76f51',
+  'Tree Cover':   '#2d6a4f',
+  'Grassland':    '#95d5b2',
+  'Shrubland':    '#52b788',
+  'Water Bodies': '#4895ef',
+  'Wetlands':     '#56cfe1',
+  'Bare/Sparse':  '#adb5bd',
+  'Snow/Ice':     '#e0fbfc',
+  'Mangroves':    '#1b4332',
+  'Moss/Lichen':  '#b7e4c7',
+};
+
+function demoWatershed(lat, lng) {
+  const s = _seed(lat, lng);
+  const cropland = Math.round(10 + s * 40);
+  const builtup  = Math.round(5  + s * 25);
+  const trees    = Math.round(5  + (1 - s) * 35);
+  const grass    = Math.round(5  + s * 20);
+  const water    = 5;
+  const other    = Math.max(0, 100 - cropland - builtup - trees - grass - water);
+  const pot      = Math.min(100, cropland * 0.6 + builtup * 0.9);
+  return {
+    location: {lat, lng}, buffer_m: 15000,
+    land_use: Object.fromEntries(
+      [['Cropland', cropland], ['Tree Cover', trees], ['Built-up', builtup],
+       ['Grassland', grass],   ['Water Bodies', water], ['Bare/Sparse', other]]
+      .filter(([, v]) => v > 0)
+    ),
+    pollution_potential: Math.round(pot),
+    risk_level: pot > 50 ? 'High' : pot > 25 ? 'Moderate' : 'Low',
+    risk_factors: [
+      cropland > 30 ? `High agricultural land (${cropland}%) — fertilizer runoff risk` : null,
+      builtup  > 20 ? `Urban area (${builtup}%) — stormwater runoff risk` : null,
+      trees    < 10 ? 'Low forest cover — reduced natural filtration' : null,
+      '⚠️ Demo mode — simulated land use data',
+    ].filter(Boolean),
+    source: 'Demo (ESA WorldCover 2021)', tile_url: null, _demo: true,
+  };
+}
+
+async function fetchWatershed(lat, lng) {
+  const el = document.getElementById('land-use-content');
+  let data;
+  try {
+    const r = await fetch(`${API_BASE_URL}/watershed?lat=${lat}&lng=${lng}`, {signal: AbortSignal.timeout(25000)});
+    if (!r.ok) throw new Error('Backend unavailable');
+    data = await r.json();
+  } catch {
+    data = demoWatershed(lat, lng);
+  }
+  renderWatershed(data);
+  if (data.tile_url) {
+    if (watershedLayer) map.removeLayer(watershedLayer);
+    watershedLayer = L.tileLayer(data.tile_url, {opacity: 0.65, attribution: 'ESA WorldCover 2021'});
+    if (overlayState.watershed) map.addLayer(watershedLayer);
+  }
+}
+
+function renderWatershed(data) {
+  const el = document.getElementById('land-use-content');
+  if (!el) return;
+  const riskColor = {High: 'var(--polluted)', Moderate: 'var(--moderate)', Low: 'var(--safe)'}[data.risk_level] || 'var(--text-muted)';
+  const lu   = data.land_use || {};
+  const bars = Object.entries(lu).sort(([, a], [, b]) => b - a).map(([name, pct]) => {
+    const color = LU_COLORS[name] || '#6c757d';
+    return `<div class="luc-row">
+      <span class="luc-label">${escHtml(name)}</span>
+      <div class="luc-track"><div class="luc-fill" style="width:${pct}%;background:${color}"></div></div>
+      <span class="luc-val">${pct}%</span>
+    </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="luc-header">
+      <span class="luc-risk" style="color:${riskColor}">Pollution Potential: <strong>${escHtml(data.risk_level)}</strong></span>
+      <span class="luc-score" style="color:${riskColor}">${data.pollution_potential}/100</span>
+    </div>
+    <div class="luc-bars">${bars}</div>
+    <ul class="luc-factors">${(data.risk_factors || []).map(f => `<li>${escHtml(f)}</li>`).join('')}</ul>
+    <p class="luc-source"><i class="fa-solid fa-satellite"></i> ${escHtml(data.source)} · ${data.buffer_m / 1000} km radius${data._demo ? ' (demo)' : ''}</p>
+  `;
+}
+
+// ─── Tier-2: Industrial Facilities Overlay ────────────────────────────────────
+const industrialGroup = L.layerGroup();
+
+const FACILITY_META = {
+  wastewater_plant:     {icon: '🏭', color: '#e74c3c', label: 'Wastewater Plant'},
+  water_treatment_plant:{icon: '💧', color: '#3b82f6', label: 'Water Treatment'},
+  factory:              {icon: '🏗️', color: '#e67e22', label: 'Factory'},
+  industrial:           {icon: '⚙️', color: '#f39c12', label: 'Industrial'},
+};
+
+async function fetchIndustrialFacilities(lat, lng) {
+  const query = `[out:json][timeout:20];
+(
+  node["man_made"="wastewater_plant"](around:10000,${lat},${lng});
+  node["man_made"="water_treatment_plant"](around:10000,${lat},${lng});
+  node["industrial"](around:10000,${lat},${lng});
+  way["man_made"="wastewater_plant"](around:10000,${lat},${lng});
+  way["man_made"="water_treatment_plant"](around:10000,${lat},${lng});
+  way["landuse"="industrial"](around:10000,${lat},${lng});
+);
+out center;`;
+  industrialGroup.clearLayers();
+  try {
+    const r = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    renderIndustrialFacilities(data.elements || []);
+  } catch(e) {
+    console.warn('Industrial facilities unavailable:', e.message);
+  }
+}
+
+function renderIndustrialFacilities(elements) {
+  industrialGroup.clearLayers();
+  let count = 0;
+  elements.forEach(el => {
+    const elLat = el.lat ?? el.center?.lat;
+    const elLng = el.lon ?? el.center?.lon;
+    if (!elLat || !elLng) return;
+    const manMade = el.tags?.man_made || '';
+    const indTag  = el.tags?.industrial || '';
+    const name    = el.tags?.name || manMade || indTag || 'Industrial Facility';
+    let type = 'industrial';
+    if (manMade === 'wastewater_plant')      type = 'wastewater_plant';
+    else if (manMade === 'water_treatment_plant') type = 'water_treatment_plant';
+    else if (el.tags?.building === 'factory' || indTag === 'factory') type = 'factory';
+    const {icon, color, label} = FACILITY_META[type] || FACILITY_META.industrial;
+    const divIcon = L.divIcon({
+      html: `<div style="background:${color};border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:14px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45)">${icon}</div>`,
+      className: '', iconSize: [28, 28], iconAnchor: [14, 14],
+    });
+    const marker = L.marker([elLat, elLng], {icon: divIcon});
+    marker.bindPopup(
+      `<div style="font-size:13px;line-height:1.6;min-width:160px">
+        <strong style="color:${color}">${icon} ${escHtml(name)}</strong><br>
+        <span style="color:#94a3b8">Type:</span> ${escHtml(label)}<br>
+        <span style="color:#94a3b8">Coords:</span> ${elLat.toFixed(4)}, ${elLng.toFixed(4)}<br>
+        <span style="font-size:11px;color:#64748b">Source: OpenStreetMap</span>
+      </div>`
+    );
+    industrialGroup.addLayer(marker);
+    count++;
+  });
+  if (count > 0 && overlayState.industrial && !map.hasLayer(industrialGroup)) map.addLayer(industrialGroup);
+  if (count > 0) showToast('info', `${count} Industrial Facilities`, 'Found within 10 km. Enable "Industrial Facilities" layer to view.', 4000);
+}
+
+// ─── Tier-2: 7-Day Rainfall Forecast ─────────────────────────────────────────
+async function fetchForecast(lat, lng, currentScore) {
+  const el = document.getElementById('forecast-content');
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=precipitation_sum,precipitation_probability_max,weathercode&forecast_days=7&timezone=auto`;
+    const r   = await fetch(url, {signal: AbortSignal.timeout(10000)});
+    if (!r.ok) throw new Error('Open-Meteo error');
+    const data = await r.json();
+    renderForecast(data, currentScore);
+  } catch(e) {
+    if (el) el.innerHTML = '<p class="forecast-placeholder"><i class="fa-solid fa-circle-xmark"></i> Weather forecast unavailable.</p>';
+    console.warn('Forecast fetch failed:', e.message);
+  }
+}
+
+function renderForecast(data, currentScore) {
+  const el = document.getElementById('forecast-content');
+  if (!el || !data.daily) return;
+  const {time, weathercode, precipitation_sum, precipitation_probability_max} = data.daily;
+  const rain3 = precipitation_sum.slice(0, 3).reduce((a, b) => a + (b || 0), 0);
+  let impactText = 'Stable', impactColor = 'var(--safe)', scoreDelta = 0;
+  if (rain3 > 20) {
+    scoreDelta  = Math.min(30, Math.round(rain3 * 0.8));
+    impactText  = `+${scoreDelta} pts`;
+    impactColor = 'var(--polluted)';
+  } else if (rain3 > 8) {
+    scoreDelta  = Math.round(rain3 * 0.5);
+    impactText  = `+${scoreDelta} pts`;
+    impactColor = 'var(--moderate)';
+  }
+  const predicted = Math.min(100, currentScore + scoreDelta);
+  const days = time.map((date, i) => {
+    const d       = new Date(date);
+    const dayName = i === 0 ? 'Today' : d.toLocaleDateString(undefined, {weekday: 'short'});
+    const rain    = precipitation_sum[i] ?? 0;
+    const prob    = precipitation_probability_max[i] ?? 0;
+    const code    = weathercode[i] ?? 0;
+    const barH    = Math.min(100, rain * 8);
+    const isHigh  = rain > 10;
+    return `<div class="forecast-day${isHigh ? ' forecast-day-alert' : ''}">
+      <div class="fd-name">${escHtml(dayName)}</div>
+      <div class="fd-icon" title="${escHtml(wmoLabel(code))}">${wmoIcon(code)}</div>
+      <div class="fd-rain${isHigh ? ' fd-rain-high' : ''}">${rain.toFixed(1)}mm</div>
+      <div class="fd-prob">${prob}%</div>
+      <div class="fd-bar-wrap"><div class="fd-bar" style="height:${barH}%;background:${isHigh ? 'var(--polluted)' : '#4895ef'}"></div></div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="forecast-impact">
+      <span class="fi-label">Turbidity Impact (3-day rain total: ${rain3.toFixed(1)}mm)</span>
+      <span class="fi-value" style="color:${impactColor}">${impactText}</span>
+      ${scoreDelta > 0 ? `<span class="fi-predicted">Projected score: ~${predicted}/100</span>` : ''}
+    </div>
+    <div class="forecast-days">${days}</div>
+    <p class="forecast-source"><i class="fa-solid fa-cloud"></i> Open-Meteo · ${escHtml(data.timezone || 'UTC')}</p>
+  `;
+}
+
+// ─── Tier-2: Active Flood / Disaster Events ───────────────────────────────────
+async function checkDisasterEvents(lat, lng) {
+  try {
+    const url = 'https://eonet.gsfc.nasa.gov/api/v3/events?category=floods&status=open&days=30&limit=100';
+    const r   = await fetch(url, {signal: AbortSignal.timeout(10000)});
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    const nearby = (data.events || []).flatMap(event => {
+      return (event.geometry || []).slice(0, 1).map(geom => {
+        if (!geom?.coordinates) return null;
+        const [eLng, eLat] = geom.coordinates;
+        const dist = haversineKm(lat, lng, eLat, eLng);
+        if (dist > 600) return null;
+        const rawUrl = event.sources?.[0]?.url || null;
+        const safeUrl = rawUrl && /^https:\/\//.test(rawUrl) ? rawUrl : null;
+        return {title: event.title, date: geom.date?.slice(0, 10) || '', dist: Math.round(dist), url: safeUrl};
+      });
+    }).filter(Boolean).sort((a, b) => a.dist - b.dist);
+    renderDisasterEvents(nearby);
+  } catch(e) {
+    console.warn('Disaster events check failed:', e.message);
+  }
+}
+
+function renderDisasterEvents(events) {
+  const section = document.getElementById('section-disaster');
+  const el      = document.getElementById('disaster-content');
+  if (!section || !el) return;
+  if (!events.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+  el.innerHTML = events.slice(0, 3).map(ev => `
+    <div class="disaster-event">
+      <span class="de-icon">🌊</span>
+      <div class="de-body">
+        <div class="de-title">${escHtml(ev.title)}</div>
+        <div class="de-meta"><span>${escHtml(ev.date)}</span><span>~${ev.dist} km away</span></div>
+      </div>
+      ${ev.url ? `<a href="${escHtml(ev.url)}" target="_blank" rel="noopener noreferrer" class="de-link" title="View source"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>` : ''}
+    </div>
+  `).join('') + `<p class="disaster-note"><i class="fa-solid fa-circle-info"></i> Active flood events from NASA EONET detected nearby. Current satellite readings may reflect post-flood water conditions.</p>`;
 }
 
 // ─── Compare set buttons ──────────────────────────────────────────────────────
@@ -555,7 +877,7 @@ dom.btnExport.addEventListener("click", () => {
   if (!state.lastAnalysis) return;
   const d = state.lastAnalysis;
   const lines = [
-    "AquaWatch — Water Quality Analysis Report",
+    "AquaVision — Water Quality Analysis Report",
     "==========================================",
     `Location:       ${d.location.lat}, ${d.location.lng}`,
     `Name:           ${state.selectedName || "Unknown"}`,

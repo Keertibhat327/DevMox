@@ -1,4 +1,4 @@
-# 🚀 How to Open AquaWatch with New Features
+# 🚀 How to Open AquaVision with New Features
 
 ## ⚡ FASTEST METHOD (Recommended)
 

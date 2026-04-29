@@ -1,9 +1,9 @@
 @echo off
-title AquaWatch Frontend
+title AquaVision Frontend
 set "ROOT=%~dp0"
 echo.
 echo ========================================
-echo   AquaWatch Frontend Server
+echo   AquaVision Frontend Server
 echo ========================================
 echo.
 echo Starting server on port 3000...

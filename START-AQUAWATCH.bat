@@ -1,23 +1,23 @@
 @echo off
-title AquaWatch Launcher
+title AquaVision Launcher
 
 set "ROOT=%~dp0"
 set "BACKEND=%ROOT%backend"
 set "FRONTEND=%ROOT%frontend"
 
 echo ================================
-echo   AquaWatch - Starting...
+echo   AquaVision - Starting...
 echo ================================
 echo.
 
 echo Starting Backend (GEE)...
-start "AquaWatch Backend" cmd /k "cd /d "%BACKEND%" && py -m uvicorn app:app --port 8000"
+start "AquaVision Backend" cmd /k "cd /d "%BACKEND%" && py -m uvicorn app:app --port 8000"
 
 echo Waiting for backend to start...
 timeout /t 4 /nobreak >nul
 
 echo Starting Frontend...
-start "AquaWatch Frontend" cmd /k "py -m http.server 3000 --directory "%FRONTEND%""
+start "AquaVision Frontend" cmd /k "py -m http.server 3000 --directory "%FRONTEND%""
 
 timeout /t 2 /nobreak >nul
 
@@ -25,7 +25,7 @@ echo Opening browser...
 start "" "http://localhost:3000"
 
 echo.
-echo Done! AquaWatch is running.
+echo Done! AquaVision is running.
 echo Frontend : http://localhost:3000
 echo Backend  : http://localhost:8000
 echo.

@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AquaWatch — Satellite Water Quality Monitor</title>
+  <title>AquaVision — Satellite Water Quality Monitor</title>
   <meta name="description" content="Real-time water quality monitoring using Sentinel-2 satellite imagery via Google Earth Engine." />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 <body>
 
@@ -18,7 +18,7 @@
   <div class="header-inner">
     <div class="brand">
       <span class="brand-icon" aria-hidden="true">🛰️</span>
-      <span class="brand-name">AquaWatch</span>
+      <span class="brand-name">AquaVision</span>
       <span class="brand-tagline">Satellite Water Quality Monitor</span>
     </div>
     <nav class="tab-nav" role="navigation" aria-label="Main navigation">
@@ -75,6 +75,14 @@
             <label class="toggle-label">
               <input type="checkbox" id="layer-pollution" />
               <span class="toggle-track"></span><span>Pollution Overlay</span>
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" id="layer-watershed" />
+              <span class="toggle-track"></span><span>Land Use Layer</span>
+            </label>
+            <label class="toggle-label">
+              <input type="checkbox" id="layer-industrial" />
+              <span class="toggle-track"></span><span>Industrial Facilities</span>
             </label>
           </div>
         </div>
@@ -234,6 +242,37 @@
                 Analysis based on 5 Sentinel-2 images with 10% average cloud cover. Confidence: High (85/100).
               </p>
             </div>
+          </div>
+
+          <!-- Upstream Land Use (Tier 2) -->
+          <div class="result-section" id="section-landuse">
+            <div class="section-header">
+              <i class="fa-solid fa-mountain-sun"></i>
+              <span class="section-title">Upstream Land Use</span>
+            </div>
+            <div id="land-use-content" class="land-use-content">
+              <p class="luc-placeholder">Run an analysis to see upstream land use data.</p>
+            </div>
+          </div>
+
+          <!-- 7-Day Rainfall Forecast (Tier 2) -->
+          <div class="result-section" id="section-forecast">
+            <div class="section-header">
+              <i class="fa-solid fa-cloud-rain"></i>
+              <span class="section-title">7-Day Rainfall Forecast</span>
+            </div>
+            <div id="forecast-content" class="forecast-content">
+              <p class="forecast-placeholder">Run an analysis to load the rainfall forecast.</p>
+            </div>
+          </div>
+
+          <!-- Active Flood Events (Tier 2) — hidden until events found -->
+          <div id="section-disaster" class="result-section hidden">
+            <div class="section-header">
+              <i class="fa-solid fa-triangle-exclamation" style="color:var(--polluted)"></i>
+              <span class="section-title" style="color:var(--polluted)">Active Flood Events Nearby</span>
+            </div>
+            <div id="disaster-content" class="disaster-content"></div>
           </div>
 
           <!-- Meta -->
@@ -681,7 +720,7 @@
     <div class="about-layout">
       <div class="about-hero">
         <div class="about-hero-icon">🛰️</div>
-        <h1>AquaWatch</h1>
+        <h1>AquaVision</h1>
         <p class="about-subtitle">Satellite-powered water quality monitoring for a healthier planet.</p>
       </div>
 
@@ -725,7 +764,7 @@
         </div>
         <div class="about-card about-card-wide">
           <h3><i class="fa-solid fa-triangle-exclamation"></i> Disclaimer</h3>
-          <p>AquaWatch provides <strong>indicative</strong> water quality assessments based on optical remote sensing indices. It cannot detect heavy metals, bacteria, or exact chemical pollutants. Results should be validated with in-situ measurements before making public health or regulatory decisions. Cloud cover, atmospheric conditions, and seasonal variation can affect accuracy.</p>
+          <p>AquaVision provides <strong>indicative</strong> water quality assessments based on optical remote sensing indices. It cannot detect heavy metals, bacteria, or exact chemical pollutants. Results should be validated with in-situ measurements before making public health or regulatory decisions. Cloud cover, atmospheric conditions, and seasonal variation can affect accuracy.</p>
         </div>
       </div>
     </div>
@@ -739,6 +778,6 @@
 <!-- ═══ SCRIPTS ═══════════════════════════════════════════════════════════════ -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

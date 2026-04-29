@@ -1,5 +1,5 @@
 """
-AquaWatch Backend — FastAPI + Google Earth Engine
+AquaVision Backend — FastAPI + Google Earth Engine
 Production water quality monitoring using Sentinel-2 satellite imagery.
 """
 
@@ -49,7 +49,7 @@ initialize_gee()
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title       = "AquaWatch API",
+    title       = "AquaVision API",
     description = "Satellite water quality monitoring via Sentinel-2 / Google Earth Engine.",
     version     = "2.0.0",
 )
@@ -394,7 +394,7 @@ def utc_now_iso() -> str:
 
 @app.get("/")
 def root():
-    return {"service": "AquaWatch API", "version": "2.0.0", "status": "running"}
+    return {"service": "AquaVision API", "version": "2.0.0", "status": "running"}
 
 
 @app.get("/health")
@@ -874,4 +874,95 @@ def alerts(
         raise
     except Exception as exc:
         logger.exception("Error in /alerts: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/watershed")
+def watershed(
+    lat:    float = Query(..., description="Latitude"),
+    lng:    float = Query(..., description="Longitude"),
+    buffer: int   = Query(15000, description="Upstream area radius in metres"),
+):
+    """
+    Land use composition in the upstream catchment area using ESA WorldCover 2021.
+    Returns land cover percentages, pollution potential score, and a visualisation tile.
+    """
+    try:
+        aoi = build_aoi(lat, lng, buffer)
+
+        # ESA WorldCover 2021 — 10 m global land cover
+        worldcover = ee.ImageCollection("ESA/WorldCover/v200").first().clip(aoi)
+
+        class_areas = worldcover.reduceRegion(
+            reducer   = ee.Reducer.frequencyHistogram(),
+            geometry  = aoi,
+            scale     = 100,
+            maxPixels = 1e9,
+        ).getInfo()
+
+        class_names = {
+            10: "Tree Cover", 20: "Shrubland",  30: "Grassland",
+            40: "Cropland",   50: "Built-up",   60: "Bare/Sparse",
+            70: "Snow/Ice",   80: "Water Bodies", 90: "Wetlands",
+            95: "Mangroves", 100: "Moss/Lichen",
+        }
+
+        histogram = class_areas.get("Map", {}) or {}
+        total     = sum(histogram.values()) if histogram else 1
+
+        land_use = {}
+        for code_str, count in histogram.items():
+            code = int(float(code_str))
+            name = class_names.get(code, f"Class {code}")
+            land_use[name] = round((count / total) * 100, 1)
+
+        land_use = dict(sorted(land_use.items(), key=lambda x: x[1], reverse=True))
+
+        cropland_pct = land_use.get("Cropland",   0)
+        builtup_pct  = land_use.get("Built-up",   0)
+        tree_pct     = land_use.get("Tree Cover", 0)
+
+        pollution_potential = min(100,
+            cropland_pct * 0.6 + builtup_pct * 0.9 + max(0, 20 - tree_pct) * 0.5
+        )
+        risk_level = "High" if pollution_potential > 50 else "Moderate" if pollution_potential > 25 else "Low"
+
+        risk_factors = []
+        if cropland_pct > 30:
+            risk_factors.append(
+                f"High agricultural land ({cropland_pct:.0f}%) — fertilizer and pesticide runoff risk"
+            )
+        if builtup_pct > 20:
+            risk_factors.append(
+                f"Significant urban area ({builtup_pct:.0f}%) — stormwater and sewage runoff risk"
+            )
+        if tree_pct < 10:
+            risk_factors.append("Low forest cover — reduced natural filtration capacity")
+        if not risk_factors:
+            risk_factors.append("Predominantly natural vegetation — good natural filtration capacity")
+
+        lc_map = worldcover.getMapId({
+            "min": 10, "max": 100,
+            "palette": [
+                "006400", "FFBB22", "FFFF4C", "F096FF", "FA0000",
+                "B4B4B4", "F0F0F0", "0064C8", "0096A0", "00CF75", "FAE6A0",
+            ],
+        })
+
+        return {
+            "location":            {"lat": round(lat, 5), "lng": round(lng, 5)},
+            "buffer_m":            buffer,
+            "land_use":            land_use,
+            "pollution_potential": round(pollution_potential, 1),
+            "risk_level":          risk_level,
+            "risk_factors":        risk_factors,
+            "tile_url":            lc_map["tile_fetcher"].url_format,
+            "source":              "ESA WorldCover 2021 (10 m resolution)",
+            "timestamp":           utc_now_iso(),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Error in /watershed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
