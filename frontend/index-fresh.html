@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>AquaWatch — Satellite Water Quality Monitor (Fresh Load)</title>
+  <meta name="description" content="Real-time water quality monitoring using Sentinel-2 satellite imagery via Google Earth Engine." />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    // Force fresh load with timestamp
+    const timestamp = new Date().getTime();
+    document.write('<link rel="stylesheet" href="styles.css?v=7&t=' + timestamp + '" />');
+  </script>
+</head>
+<body>
+  <div style="position: fixed; top: 10px; right: 10px; background: #27ae60; color: white; padding: 8px 16px; border-radius: 8px; font-size: 12px; z-index: 9999; font-family: Arial;">
+    ✅ FRESH LOAD MODE - Cache Disabled
+  </div>
+  
+  <script>
+    // This will redirect to the main index.html but with cache-busting parameters
+    const timestamp = new Date().getTime();
+    const url = 'index.html?v=7&nocache=' + timestamp;
+    console.log('Redirecting to:', url);
+    window.location.href = url;
+  </script>
+  
+  <div style="display: flex; align-items: center; justify-content: center; height: 100vh; background: #0a1628; color: #e2e8f0; font-family: Arial; flex-direction: column; gap: 20px;">
+    <div style="font-size: 48px;">🔄</div>
+    <div style="font-size: 24px; font-weight: bold;">Loading Fresh Version...</div>
+    <div style="font-size: 14px; color: #94a3b8;">Bypassing browser cache</div>
+  </div>
+</body>
+</html>
