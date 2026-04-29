@@ -26,10 +26,61 @@ function demoAnalysis(lat, lng) {
   if (ndwi < 0.2) factors.push("Low water clarity (NDWI)");
   const today = new Date(); const start = new Date(today); start.setDate(start.getDate()-60);
   const fmt = d => d.toISOString().slice(0,10);
+  
+  // Water Appearance
+  let appearance, appearanceDesc, appearanceIndicator;
+  if (fai > 0.02) {
+    appearance = "Greenish";
+    appearanceDesc = "High algal pigment concentration detected via spectral analysis";
+    appearanceIndicator = "Possible algal bloom or eutrophication";
+  } else if (ndti > 0.1) {
+    appearance = "Brownish/Murky";
+    appearanceDesc = "High suspended sediment detected via spectral reflectance";
+    appearanceIndicator = "Likely sediment load from erosion or runoff";
+  } else if (ndwi > 0.5) {
+    appearance = "Clear/Blue";
+    appearanceDesc = "Low turbidity and algae, high water clarity";
+    appearanceIndicator = "Healthy water body characteristics";
+  } else {
+    appearance = "Slightly Turbid";
+    appearanceDesc = "Moderate clarity with some suspended matter";
+    appearanceIndicator = "Normal seasonal variation or minor pollution";
+  }
+  
+  // Pollution Sources
+  const sources = [];
+  if (ndti > 0.1) {
+    sources.push({
+      source: "Agricultural runoff",
+      likelihood: "High",
+      reasoning: "Elevated turbidity consistent with soil erosion and sediment transport from agricultural areas",
+      indicators: ["High NDTI", "Suspended sediment signature"]
+    });
+  }
+  if (fai > 0.02) {
+    sources.push({
+      source: "Nutrient pollution (eutrophication)",
+      likelihood: "High",
+      reasoning: "Strong algal bloom signature indicates excess nutrients, typically from fertilizers or sewage",
+      indicators: ["High FAI", "Algal pigment signature"]
+    });
+  }
+  if (sources.length === 0) {
+    sources.push({
+      source: "No significant pollution detected",
+      likelihood: "High",
+      reasoning: "All spectral indicators within normal ranges for healthy water bodies",
+      indicators: ["Normal NDWI/NDTI/FAI", "Clean water signature"]
+    });
+  }
+  
+  const images = 5 + Math.round(s*10);
+  const cloudPct = Math.round(s*15);
+  
   return {
     location: {lat, lng}, aoi_buffer_m: 5000,
     date_range: {start: fmt(start), end: fmt(today)},
-    images_used: 5 + Math.round(s*10), cloud_cover_pct: Math.round(s*15),
+    images_used: images, cloud_cover_pct: cloudPct,
     indices: {ndwi, ndti, fai},
     classification: {label, score, color, factors,
       contributions: {"Turbidity (NDTI)": parseFloat((0.45*Math.max(0,(ndti+0.2)/0.6)*100).toFixed(1)),
@@ -37,6 +88,26 @@ function demoAnalysis(lat, lng) {
                       "Water Clarity (NDWI)": parseFloat((0.20*(1-Math.max(0,Math.min(1,ndwi/0.8)))*100).toFixed(1))},
       dominant: "Turbidity (NDTI)", weights: {ndti:0.45,fai:0.35,ndwi:0.20}},
     confidence: {level: s > 0.5 ? "High" : "Medium", score: s > 0.5 ? 80 : 55, reason: "Demo mode — simulated data"},
+    water_appearance: {
+      appearance: appearance,
+      description: appearanceDesc,
+      indicator: appearanceIndicator,
+      note: "Based on spectral reflectance analysis, not direct visual observation"
+    },
+    pollution_sources: {
+      possible_sources: sources,
+      confidence: score > 60 ? "Moderate" : "Low",
+      disclaimer: "These are probabilistic inferences based on spectral patterns, not confirmed identifications. Ground validation and water sampling required for definitive source attribution.",
+      methodology: "Analysis combines spectral indices with established environmental science literature on pollution signatures"
+    },
+    data_reliability: {
+      cloud_cover_pct: cloudPct,
+      images_used: images,
+      valid_pixels: 1500,
+      confidence_level: s > 0.5 ? "High" : "Medium",
+      confidence_score: s > 0.5 ? 80 : 55,
+      reliability_note: `Analysis based on ${images} Sentinel-2 images with ${cloudPct}% average cloud cover. Confidence: ${s > 0.5 ? "High" : "Medium"} (${s > 0.5 ? 80 : 55}/100).`
+    },
     tile_urls: {rgb: null, ndwi: null, pollution: null},
     bbox: {west: lng-0.05, south: lat-0.05, east: lng+0.05, north: lat+0.05},
     timestamp: new Date().toISOString(), _demo: true,
@@ -356,6 +427,77 @@ function renderResultCard(data, demo=false) {
   dom.resultFactors.innerHTML = cls.factors.length
     ? cls.factors.map(f=>`<span class="factor-tag">${f}</span>`).join("")
     : `<span style="font-size:0.75rem;color:var(--text-muted)">No significant factors detected</span>`;
+
+  // Water Appearance (NEW)
+  if (data.water_appearance) {
+    const wa = data.water_appearance;
+    const appearanceEl = document.getElementById('water-appearance');
+    if (appearanceEl) {
+      appearanceEl.innerHTML = `
+        <div class="appearance-badge">${escHtml(wa.appearance)}</div>
+        <p class="appearance-desc">${escHtml(wa.description)}</p>
+        <p class="appearance-indicator"><strong>Indicator:</strong> ${escHtml(wa.indicator)}</p>
+        <p class="appearance-note"><i class="fa-solid fa-info-circle"></i> ${escHtml(wa.note)}</p>
+      `;
+    }
+  }
+
+  // Possible Pollution Sources (NEW)
+  if (data.pollution_sources) {
+    const ps = data.pollution_sources;
+    const sourcesEl = document.getElementById('pollution-sources');
+    if (sourcesEl) {
+      sourcesEl.innerHTML = `
+        <div class="sources-confidence">Confidence: <strong>${escHtml(ps.confidence)}</strong></div>
+        ${ps.possible_sources.map(source => `
+          <div class="source-item">
+            <div class="source-header">
+              <span class="source-name">${escHtml(source.source)}</span>
+              <span class="source-likelihood likelihood-${source.likelihood.toLowerCase()}">${escHtml(source.likelihood)}</span>
+            </div>
+            <p class="source-reasoning">${escHtml(source.reasoning)}</p>
+            <div class="source-indicators">
+              ${source.indicators.map(ind => `<span class="indicator-tag">${escHtml(ind)}</span>`).join('')}
+            </div>
+          </div>
+        `).join('')}
+        <p class="sources-disclaimer"><i class="fa-solid fa-shield-halved"></i> ${escHtml(ps.disclaimer)}</p>
+      `;
+    }
+  }
+
+  // Data Reliability (NEW)
+  if (data.data_reliability) {
+    const dr = data.data_reliability;
+    const reliabilityEl = document.getElementById('data-reliability');
+    if (reliabilityEl) {
+      const confColor = dr.confidence_level==="High"?"var(--safe)":dr.confidence_level==="Medium"?"var(--moderate)":"var(--polluted)";
+      reliabilityEl.innerHTML = `
+        <div class="reliability-grid">
+          <div class="reliability-item">
+            <div class="reliability-label">Images Used</div>
+            <div class="reliability-value">${dr.images_used}</div>
+          </div>
+          <div class="reliability-item">
+            <div class="reliability-label">Cloud Cover</div>
+            <div class="reliability-value">${dr.cloud_cover_pct}%</div>
+          </div>
+          <div class="reliability-item">
+            <div class="reliability-label">Valid Pixels</div>
+            <div class="reliability-value">${dr.valid_pixels.toLocaleString()}</div>
+          </div>
+          <div class="reliability-item">
+            <div class="reliability-label">Confidence</div>
+            <div class="reliability-value" style="color:${confColor}">${dr.confidence_level}</div>
+          </div>
+        </div>
+        <div class="reliability-score-bar">
+          <div class="reliability-score-fill" style="width:${dr.confidence_score}%;background:${confColor}"></div>
+        </div>
+        <p class="reliability-note">${escHtml(dr.reliability_note)}</p>
+      `;
+    }
+  }
 
   dom.resultImages.textContent = `📡 ${data.images_used} images · ☁️ ${data.cloud_cover_pct}% cloud${demo?" (demo)":""}`;
   dom.resultDates.textContent  = `📅 ${data.date_range.start} → ${data.date_range.end}`;

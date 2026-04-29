@@ -222,6 +222,164 @@ def compute_confidence(images_used: int, cloud_pct: float, pixel_count: int) -> 
     return {"level": level, "score": score, "reason": reason}
 
 
+def infer_water_appearance(ndwi: float, ndti: float, fai: float) -> dict:
+    """
+    Infer water appearance based on spectral reflectance patterns.
+    
+    This is NOT direct visual observation but spectral inference:
+    - Greenish → High FAI (algal pigments absorb red, reflect green)
+    - Brownish → High NDTI (suspended sediment scatters all wavelengths)
+    - Clear → High NDWI, low NDTI/FAI (clean water absorbs NIR)
+    """
+    # Normalize indices for decision logic
+    n_ndti = _norm(ndti, NDTI_MIN, NDTI_MAX)
+    n_fai = _norm(fai, FAI_MIN, FAI_MAX)
+    n_ndwi = _norm(ndwi, NDWI_MIN, NDWI_MAX)
+    
+    # Decision tree based on spectral signatures
+    if n_fai > 0.6:  # Strong algal signal
+        appearance = "Greenish"
+        description = "High algal pigment concentration detected via spectral analysis"
+        indicator = "Possible algal bloom or eutrophication"
+    elif n_ndti > 0.6:  # Strong turbidity signal
+        appearance = "Brownish/Murky"
+        description = "High suspended sediment detected via spectral reflectance"
+        indicator = "Likely sediment load from erosion or runoff"
+    elif n_ndti > 0.4 and n_fai > 0.3:  # Mixed signal
+        appearance = "Greenish-Brown"
+        description = "Mixed signal: both algae and sediment present"
+        indicator = "Combined organic and inorganic pollution"
+    elif n_ndwi > 0.6 and n_ndti < 0.2 and n_fai < 0.2:  # Clean water
+        appearance = "Clear/Blue"
+        description = "Low turbidity and algae, high water clarity"
+        indicator = "Healthy water body characteristics"
+    elif n_ndwi < 0.3:  # Very low water signal
+        appearance = "Opaque/Turbid"
+        description = "Very low water clarity, high light scattering"
+        indicator = "Severe turbidity or contamination"
+    else:  # Moderate conditions
+        appearance = "Slightly Turbid"
+        description = "Moderate clarity with some suspended matter"
+        indicator = "Normal seasonal variation or minor pollution"
+    
+    return {
+        "appearance": appearance,
+        "description": description,
+        "indicator": indicator,
+        "note": "Based on spectral reflectance analysis, not direct visual observation"
+    }
+
+
+def infer_pollution_sources(ndwi: float, ndti: float, fai: float, score: float) -> dict:
+    """
+    Contextual inference of POSSIBLE pollution sources based on spectral signatures.
+    
+    CRITICAL: Uses probabilistic language only. Does NOT name entities or assign blame.
+    This is environmental intelligence, not accusation.
+    """
+    sources = []
+    confidence_level = "Low"
+    
+    # Normalize for decision logic
+    n_ndti = _norm(ndti, NDTI_MIN, NDTI_MAX)
+    n_fai = _norm(fai, FAI_MIN, FAI_MAX)
+    n_ndwi = _norm(ndwi, NDWI_MIN, NDWI_MAX)
+    
+    # High turbidity patterns
+    if n_ndti > 0.5:
+        if n_ndti > 0.7:
+            sources.append({
+                "source": "Agricultural runoff",
+                "likelihood": "High",
+                "reasoning": "Elevated turbidity consistent with soil erosion and sediment transport from agricultural areas",
+                "indicators": ["High NDTI", "Suspended sediment signature"]
+            })
+            sources.append({
+                "source": "Construction site runoff",
+                "likelihood": "Moderate",
+                "reasoning": "Turbidity pattern matches disturbed soil and exposed earth typical of construction activities",
+                "indicators": ["Sediment load", "Erosion signature"]
+            })
+            confidence_level = "Moderate"
+        else:
+            sources.append({
+                "source": "Natural erosion or seasonal runoff",
+                "likelihood": "Moderate",
+                "reasoning": "Moderate turbidity may indicate natural sediment transport during rainfall events",
+                "indicators": ["Moderate NDTI", "Seasonal variation"]
+            })
+    
+    # High algal activity patterns
+    if n_fai > 0.5:
+        if n_fai > 0.7:
+            sources.append({
+                "source": "Nutrient pollution (eutrophication)",
+                "likelihood": "High",
+                "reasoning": "Strong algal bloom signature indicates excess nutrients, typically from fertilizers or sewage",
+                "indicators": ["High FAI", "Algal pigment signature", "Possible nitrogen/phosphorus enrichment"]
+            })
+            sources.append({
+                "source": "Urban wastewater discharge",
+                "likelihood": "Moderate",
+                "reasoning": "Algal growth pattern consistent with nutrient-rich wastewater inputs",
+                "indicators": ["Eutrophication", "Organic loading"]
+            })
+            confidence_level = "Moderate" if confidence_level != "High" else "High"
+        else:
+            sources.append({
+                "source": "Agricultural fertilizer runoff",
+                "likelihood": "Moderate",
+                "reasoning": "Moderate algal activity suggests nutrient enrichment from agricultural sources",
+                "indicators": ["Moderate FAI", "Nutrient signature"]
+            })
+    
+    # Combined high turbidity + algae
+    if n_ndti > 0.4 and n_fai > 0.4:
+        sources.append({
+            "source": "Mixed urban and agricultural pollution",
+            "likelihood": "Moderate",
+            "reasoning": "Combined sediment and nutrient signals suggest multiple pollution pathways",
+            "indicators": ["High NDTI + FAI", "Complex pollution signature"]
+        })
+        confidence_level = "Moderate"
+    
+    # Low water clarity patterns
+    if n_ndwi < 0.3:
+        if score > 60:  # Severe pollution
+            sources.append({
+                "source": "Industrial discharge or severe contamination",
+                "likelihood": "Possible",
+                "reasoning": "Very low water clarity combined with high pollution score may indicate industrial effluent or severe contamination event",
+                "indicators": ["Very low NDWI", "High pollution score", "Severe opacity"]
+            })
+            confidence_level = "High"
+    
+    # If no strong signals, provide general assessment
+    if not sources:
+        if score > 30:
+            sources.append({
+                "source": "Background pollution or natural variation",
+                "likelihood": "Likely",
+                "reasoning": "Moderate pollution levels without strong specific signatures suggest diffuse sources or natural processes",
+                "indicators": ["Mixed signals", "No dominant pattern"]
+            })
+        else:
+            sources.append({
+                "source": "No significant pollution detected",
+                "likelihood": "High",
+                "reasoning": "All spectral indicators within normal ranges for healthy water bodies",
+                "indicators": ["Normal NDWI/NDTI/FAI", "Clean water signature"]
+            })
+            confidence_level = "High"
+    
+    return {
+        "possible_sources": sources,
+        "confidence": confidence_level,
+        "disclaimer": "These are probabilistic inferences based on spectral patterns, not confirmed identifications. Ground validation and water sampling required for definitive source attribution.",
+        "methodology": "Analysis combines spectral indices with established environmental science literature on pollution signatures"
+    }
+
+
 def date_range(days_back: int = 60):
     end   = datetime.now(timezone.utc)
     start = end - timedelta(days=days_back)
@@ -306,6 +464,21 @@ def analyze(
 
         classification = compute_pollution_score(ndwi_val, ndti_val, fai_val)
         confidence     = compute_confidence(n_images, mean_cloud, pix_count)
+        water_appearance = infer_water_appearance(ndwi_val, ndti_val, fai_val)
+        pollution_sources = infer_pollution_sources(ndwi_val, ndti_val, fai_val, classification["score"])
+
+        # Data reliability metrics
+        data_reliability = {
+            "cloud_cover_pct": round(mean_cloud, 1),
+            "images_used": n_images,
+            "valid_pixels": pix_count,
+            "confidence_level": confidence["level"],
+            "confidence_score": confidence["score"],
+            "reliability_note": (
+                f"Analysis based on {n_images} Sentinel-2 images with {round(mean_cloud,1)}% average cloud cover. "
+                f"Confidence: {confidence['level']} ({confidence['score']}/100)."
+            )
+        }
 
         # GEE tile URLs
         rgb_map = composite.getMapId({
@@ -339,6 +512,9 @@ def analyze(
             },
             "classification": classification,
             "confidence":     confidence,
+            "water_appearance": water_appearance,
+            "pollution_sources": pollution_sources,
+            "data_reliability": data_reliability,
             "tile_urls": {
                 "rgb":       rgb_map["tile_fetcher"].url_format,
                 "ndwi":      ndwi_map["tile_fetcher"].url_format,
@@ -346,6 +522,7 @@ def analyze(
             },
             "bbox":      bbox,
             "timestamp": utc_now_iso(),
+            "disclaimer": "This system provides indicative analysis based on satellite-derived environmental indicators. It does not identify or confirm specific pollutants or responsible entities. Ground validation is recommended for regulatory or health decisions."
         }
 
     except HTTPException:
